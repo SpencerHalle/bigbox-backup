@@ -1,0 +1,10 @@
+[Unit]
+Description=bigbox nightly local backup (nextcloud + immich + recipes -> /media/backup)
+After=network-online.target
+
+[Service]
+Type=oneshot
+Nice=15
+IOSchedulingClass=idle
+ExecStart=%h/homelab/backup/backup.sh
+TimeoutStartSec=6h
