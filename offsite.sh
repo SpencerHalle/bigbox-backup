@@ -24,22 +24,23 @@ mode=${SSH_ORIGINAL_COMMAND:-backup}
 IFS= read -r RESTIC_PASSWORD || { echo "no password on stdin" >&2; exit 2; }
 export RESTIC_PASSWORD RESTIC_REPOSITORY=$REPO
 
-case "$mode" in
-  check)      exec "$RESTIC" snapshots --compact ;;   # read-only connectivity test
-  backup)     ;;
-  backup\ *)  LIMIT_UPLOAD_KIB=${mode#backup } ;;     # office can pass a limit
-  *)          echo "unknown mode: $mode" >&2; exit 2 ;;
+# mode: "check" | "backup [LIMIT_UPLOAD_KIB [OFFICE_FREE_BYTES]]"  (office sends the args)
+read -r -a args <<< "$mode"
+case "${args[0]:-}" in
+  check)  exec "$RESTIC" snapshots --compact ;;   # read-only connectivity test
+  backup) LIMIT_UPLOAD_KIB=${args[1]:-$LIMIT_UPLOAD_KIB}; OFFICE_FREE=${args[2]:-} ;;
+  *)      echo "unknown mode: $mode" >&2; exit 2 ;;
 esac
+STATUS_PY=/home/spencer/homelab/backup/offsite_status.py
 
 # don`t snapshot the mirror while backup.sh is mid-rsync; wait for it, then let go
 exec 9>/tmp/bigbox-backup.lock
 flock -w 7200 9 || echo "warning: nightly backup still running after 2h, continuing" >&2
 flock -u 9
 
-start=$(date +%s)
 limit=(); [ "$LIMIT_UPLOAD_KIB" -gt 0 ] 2>/dev/null && limit=(--limit-upload "$LIMIT_UPLOAD_KIB")
 
-podman unshare "$RESTIC" backup --host bigbox --tag nightly "${limit[@]}" \
+podman unshare "$RESTIC" backup --json --host bigbox --tag nightly "${limit[@]}" \
   --exclude /media/backup/lost+found \
   --exclude /media/backup/db-history \
   --exclude "/home/spencer/homelab/podman/*/db" \
@@ -54,10 +55,12 @@ podman unshare "$RESTIC" backup --host bigbox --tag nightly "${limit[@]}" \
   /media/backup \
   /home/spencer/homelab \
   /home/spencer/.config/containers/systemd \
-  /home/spencer/.config/systemd/user
-rc=$?   # 0 ok, 3 = snapshot made but some files unreadable
+  /home/spencer/.config/systemd/user \
+  | "$STATUS_PY" "$STATUS" "${OFFICE_FREE:-}"
+rc=${PIPESTATUS[0]}   # 0 ok, 3 = snapshot made but some files unreadable
 
-end=$(date +%s)
-printf "{\"ts\":%s,\"iso\":\"%s\",\"ok\":%s,\"rc\":%s,\"duration_s\":%s}\n" \
-  "$end" "$(date -Is)" "$([ $rc -eq 0 ] && echo true || echo false)" "$rc" "$((end-start))" > "$STATUS"
+# snapshot count + repo size for the dashboard (reads are allowed in append-only mode)
+snaps=$("$RESTIC" snapshots --json --host bigbox 2>/dev/null | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null)
+repo=$("$RESTIC" stats --json --mode raw-data 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)[\"total_size\"])" 2>/dev/null)
+"$STATUS_PY" "$STATUS" --finish "$rc" "${snaps:-}" "${repo:-}"
 exit $rc
