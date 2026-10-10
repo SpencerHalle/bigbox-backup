@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Nightly local backup: nextcloud + immich + recipe-app  ->  /media/backup
+# Nightly local backup (00:30, ahead of the 02:00 offsite pull — see offsite.sh): nextcloud + immich + recipe-app  ->  /media/backup
 #
 # Incremental — rsync only moves changed files. This is a MIRROR, not history
 # (that's what the planned Borg repo on `office` is for); the compressed DB
